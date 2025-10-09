@@ -12,7 +12,7 @@ torch
 redis
 
 # MCP & Tools
-mcp-sdk
+#mcp-sdk
 fastapi
 uvicorn[standard]
 pydantic

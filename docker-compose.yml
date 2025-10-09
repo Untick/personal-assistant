@@ -1,0 +1,75 @@
+# Указываем версию синтаксиса
+version: '3.8'
+
+# Раздел, где мы описываем все наши сервисы (контейнеры)
+services:
+  # 1. Сервис LLM Ollama
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    restart: always
+    volumes:
+      - ollama_data:/root/.ollama # Сохраняем скачанные модели между перезапусками
+    networks:
+      - agent-net
+
+  # 2. Сервис памяти Redis
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: always
+    volumes:
+      - redis_data:/data # Сохраняем данные Redis между перезапусками
+    networks:
+      - agent-net
+
+  # 3. Наш сервер с инструментами
+  mcp-server:
+    build:
+      context: . # Собирать из текущей директории
+      dockerfile: mcp_server/Dockerfile # Используя этот Dockerfile
+    container_name: mcp_server
+    restart: always
+    env_file: .env # Передать все переменные из .env файла внутрь контейнера
+    volumes:
+      # Пробрасываем файлы для аутентификации Google, чтобы не терять их
+      - ./mcp_server/token.json:/app/token.json
+      - ./mcp_server/credentials.json:/app/credentials.json
+    ports:
+      - "8000:8000" # Открываем порт 8000 наружу для отладки
+    depends_on: # Не запускать этот сервис, пока не запустится ollama
+      - ollama
+    networks:
+      - agent-net
+
+  # 4. Наш основной сервис агента
+  agent:
+    build:
+      context: .
+      dockerfile: agent_app/Dockerfile
+    container_name: research_agent
+    restart: always
+    env_file: .env
+    volumes:
+      # Пробрасываем папку с векторной базой
+      - ./chroma:/app/chroma
+      # Пробрасываем кэш для моделей эмбеддингов, чтобы не качать их каждый раз
+      - hf_cache:/root/.cache/huggingface
+    depends_on: # Этот сервис самый главный, он ждет запуска всех остальных
+      - mcp-server
+      - redis
+      - ollama
+    networks:
+      - agent-net
+
+# Раздел для описания сетей
+networks:
+  agent-net:
+    driver: bridge # Стандартная сеть, позволяет контейнерам общаться друг с другом по именам
+
+# Раздел для описания volumes (мест для хранения данных)
+volumes:
+  ollama_data:
+  redis_data:
+  chroma:
+  hf_cache:
