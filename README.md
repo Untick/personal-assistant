@@ -162,7 +162,8 @@ docker-compose exec ollama ollama pull llama3:8b
 ```
 После завершения скачивания, перезапустите сервис агента, чтобы он подхватил готовую модель:
 ```bash
-docker-compose restart research_agent```
+docker-compose restart research_agent
+```
 **Ваш ассистент готов к работе!**
 
 ## 💬 Как использовать
@@ -187,8 +188,6 @@ docker-compose restart research_agent```
 *   **[Ollama](https://ollama.com/)**: Инструмент для локального запуска LLM.
 
 ## 📂 Структура проекта
-
-```
 .
 ├── agent_app/          # "Мозг" - сервис агента
 │   ├── agent.py        # Ядро агента (LangChain, LLM, инструменты)
