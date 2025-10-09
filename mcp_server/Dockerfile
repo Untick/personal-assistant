@@ -15,4 +15,5 @@ COPY ./mcp_server /app
 
 # 6. Команда для запуска MCP-сервера с помощью uvicorn
 # 0.0.0.0 делает сервер доступным извне контейнера
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+#CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "main.py"]
