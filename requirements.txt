@@ -1,0 +1,30 @@
+# LangChain Core
+langchain
+langchain-community
+
+# LLM & Vector DB
+ollama
+chromadb
+sentence-transformers
+torch
+
+# Память
+redis
+
+# MCP & Tools
+mcp-sdk
+fastapi
+uvicorn[standard]
+pydantic
+
+# Telegram
+aiogram
+
+# Google APIs
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+# Другие инструменты
+tavily-python
+python-dotenv
