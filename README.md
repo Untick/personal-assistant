@@ -5,7 +5,8 @@
 
 ## 📸 Скриншоты
 
-![Uploading image.png…]()
+<img width="646" height="727" alt="image" src="https://github.com/user-attachments/assets/6044c2bc-a172-4239-a49c-9e47c267dd29" />
+
 
 
 
