@@ -63,12 +63,27 @@ async def get_google_tasks(task_list_id: str) -> Union[List[GoogleTask], str]:
         logging.error(f"Ошибка при получении списка задач: {e}")
         return f"Ошибка Google Tasks: {e}"
 
-async def create_google_task(title: str, task_list_id: str) -> Union[OperationStatus, str]:
+async def create_google_task(title: str, task_list_id: str | None = None) -> Union[OperationStatus, str]:
     """Чистая логика для создания задачи в Google Tasks."""
     try:
         service = await asyncio.to_thread(get_google_api_service, 'tasks', 'v1')
+
+        
+        # Если ID списка задач не предоставлен, находим ID первого (основного) списка
+        if not task_list_id or task_list_id == '@default':
+            logging.info("ID списка задач не указан, ищем список по умолчанию...")
+            task_lists = await asyncio.to_thread(service.tasklists().list().execute)
+            if task_lists.get('items'):
+                task_list_id = task_lists['items'][0]['id']
+                logging.info(f"Найден ID списка по умолчанию: {task_list_id}")
+            else:
+                raise Exception("У пользователя нет списков задач.")
+        
+
         task = {'title': title}
-        result = await asyncio.to_thread(service.tasks().insert(tasklist=task_list_id, body=task).execute)
+        result = await asyncio.to_thread(
+            service.tasks().insert(tasklist=task_list_id, body=task).execute
+        )
         return OperationStatus(status="success", details=f"Задача '{result['title']}' создана.")
     except Exception as e:
         logging.error(f"Ошибка при добавлении задачи: {e}")

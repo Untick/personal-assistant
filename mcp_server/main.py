@@ -1,11 +1,12 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI
+
 from mcp.server.fastmcp import FastMCP
 import mcp
 from typing import List, Union
-
+from starlette.applications import Starlette
+from starlette.routing import Mount
 # Импортируем наши модели и бизнес-логику
 from tools import (
     perform_web_search,
@@ -19,11 +20,6 @@ from tools import (
     OperationStatus
 )
 
-app = FastAPI(
-    title="Personal Assistant MCP Server",
-    description="Сервер, предоставляющий инструменты для AI-агента.",
-    version="1.0.0"
-)
 
 # Создаем экземпляр сервера. Имя будет видно клиентам.
 mcp = FastMCP("PersonalAssistantTools")
@@ -54,11 +50,14 @@ async def create_google_calendar_event(summary: str, start_time: str, end_time: 
     """Создает новое событие в Google Calendar. Дата и время должны быть в формате ISO 8601."""
     return await create_google_event(summary, start_time, end_time, timezone)
 
-app.mount("/mcp", mcp.streamable_http_app())
 
-# 2. КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Создаем переменную 'mcp', которую ищет Uvicorn,
-#    вызывая метод .streamable_http_mcp() на нашем сервере.
+# app = Starlette(
+#     routes=[
+#         Mount("/", app=mcp.streamable_http_app()),
+#     ]
+# )
 
-@app.get("/")
-def health_check():
-    return {"status": "ok", "mcp_endpoint": "/mcp"}
+if __name__ == "__main__":
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.port = 8000
+    mcp.run(transport="streamable-http")

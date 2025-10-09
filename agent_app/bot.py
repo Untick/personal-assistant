@@ -1,95 +1,117 @@
-# agent_app/bot.py
+import os
 import asyncio
 import logging
-import os
+import json
+from typing import List, Any
 
-from aiogram import Bot, Dispatcher, Router, types, F
-from aiogram.filters import Command
-from aiogram.enums import ParseMode, ChatAction
+from langchain import hub
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain.tools.retriever import create_retriever_tool
+from langchain.tools import Tool
+from langchain_community.llms import Ollama
 
-# Импортируем наши готовые компоненты
-# Важно: импорты должны быть относительными, так как все будет в одном пакете
-from agent import agent_executor
-from memory import get_user_memory
+from mcp import ClientSession, types as mcp_types
+from mcp.client.streamable_http import streamablehttp_client
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-router = Router() 
+from .db import get_vector_db_retriever
 
-@router.message(Command("start"))
-async def start_command(message: types.Message):
-    """Обработчик команды /start."""
-    await message.answer(f"Привет, {message.from_user.full_name}! Я твой личный AI-помощник. Чем могу помочь?",parse_mode=ParseMode.HTML)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-@router.message(Command("help"))
-async def help_command(message: types.Message):
-    """Обработчик команды /help."""
-    help_text = (
-        "<b>Я твой личный AI-помощник. Вот что я могу:</b>\n\n"
-        "📅 <b>Google Calendar:</b>\n"
-        "   - 'Что у меня на сегодня?'\n"
-        "   - 'Создай событие: Обед с командой завтра в 13:00'\n\n"
-        "✅ <b>Google Tasks:</b>\n"
-        "   - 'Какие у меня задачи?'\n"
-        "   - 'Добавь задачу: купить молоко'\n\n"
-        "🌐 <b>Web Search:</b>\n"
-        "   - 'Сделай сводку новостей по AI за сегодня'\n\n"
-        "Просто напиши мне свой вопрос."
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+async def create_mcp_tools(mcp_base_url: str) -> List[Tool]:
+    """Создает инструменты LangChain, правильно обрабатывая аргументы для ReAct."""
+    mcp_url = mcp_base_url.rstrip('/') + "/mcp"
+    logging.info(f"Подключение к MCP-серверу: {mcp_url}")
+    langchain_tools = []
+    try:
+        async with streamablehttp_client(mcp_url) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                server_tools_response = await session.list_tools()
+                server_tools: List[mcp_types.Tool] = server_tools_response.tools
+        logging.info(f"С MCP-сервера получено {len(server_tools)} инструментов.")
+
+        for tool_spec in server_tools:
+            
+            def create_tool_coro(spec: mcp_types.Tool):
+                # Функция теперь принимает один позиционный аргумент 'tool_input'
+                async def tool_coro(tool_input: str) -> Any:
+                    name = spec.name
+                    params = {}
+                    
+                    # Получаем схему аргументов инструмента
+                    input_schema = spec.inputSchema if spec.inputSchema else {}
+                    properties = input_schema.get('properties', {})
+                    
+                    # ReAct агент передает один строковый аргумент.
+                    # Если инструмент ожидает ровно один аргумент, используем строку как его значение.
+                    if len(properties) == 1:
+                        param_name = list(properties.keys())[0]
+                        params = {param_name: tool_input}
+                    else:
+                        # Если аргументов 0 или >1, модель должна была передать JSON.
+                        # Если она этого не сделала, мы не можем угадать параметры.
+                        # В этом случае можно либо передать пустой словарь, либо вернуть ошибку.
+                        # Для простоты передадим пустой словарь, но в логах это будет видно.
+                        logging.warning(f"Инструмент '{name}' ожидает {len(properties)} аргументов, но получил простую строку. Попытка вызова с пустыми параметрами.")
+                        params = {}
+                    
+                    logging.info(f"Вызов MCP-инструмента '{name}' с параметрами: {params}")
+                    try:
+                        async with streamablehttp_client(mcp_url) as (r, w, _):
+                            async with ClientSession(r, w) as s:
+                                await s.initialize()
+                                result = await s.call_tool(name, arguments=params)
+                                return result.structuredContent
+                    except Exception as e:
+                        return f"Ошибка при вызове инструмента '{name}': {e}"
+                return tool_coro
+
+            langchain_tools.append(Tool(
+                name=tool_spec.name,
+                func=None,
+                coroutine=create_tool_coro(tool_spec),
+                description=tool_spec.description,
+            ))
+        logging.info("Инструменты на основе MCP успешно созданы.")
+            
+    except Exception as e:
+        logging.error(f"Не удалось загрузить инструменты с MCP-сервера: {e}", exc_info=True)
+    return langchain_tools
+
+
+def create_agent_executor():
+    """Собирает и возвращает готовый к работе AgentExecutor."""
+    logging.info("Создание ядра агента...")
+    
+    llm = Ollama(model="llama3:8b", base_url=OLLAMA_BASE_URL, temperature=0.1)
+    
+    mcp_tools = asyncio.run(create_mcp_tools(MCP_SERVER_URL))
+    
+    retriever = get_vector_db_retriever()
+    retriever_tool = create_retriever_tool(retriever, "knowledge_base_search", "Используй этот инструмент, чтобы отвечать на вопросы о целях проекта, его архитектуре и технологиях.")
+    
+    all_tools = mcp_tools + [retriever_tool]
+    logging.info(f"Всего инструментов загружено: {len(all_tools)}")
+
+    # Мы добавляем к стандартному промпту свои инструкции
+    prompt = hub.pull("hwchase17/react").partial(
+        instructions="Всегда отвечай на русском языке. Будь кратким и вежливым. Если нашел ответ с помощью инструмента, сразу давай 'Final Answer', не пытайся использовать другие инструменты без необходимости."
     )
-    await message.answer(help_text, parse_mode=ParseMode.HTML)
-
-@router.message(Command("health"))
-async def health_command(message: types.Message, bot: Bot):
-    """Обработчик команды /health для проверки статуса."""
-    try:
-        await bot.get_me()
-        status_text = "✅ Telegram Bot: Работает"
-    except Exception as e:
-        status_text = f"❌ Telegram Bot: Ошибка ({e})"
-    await message.answer(f"<b>Статус системы:</b>\n\n{status_text}", parse_mode=ParseMode.HTML)
-
-@router.message(F.text)
-async def handle_message(message: types.Message, bot: Bot):
-    """Основной обработчик текстовых сообщений."""
-    user_id = message.from_user.id
-    user_input = message.text
-    logging.info(f"Получено сообщение от user_id {user_id}: {user_input}")
-
-    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-
-    memory = get_user_memory(user_id)
-    try:
-        # Мы запускаем блокирующий вызов agent_executor в отдельном потоке,
-        # чтобы не "замораживать" основной поток, где работает aiogram.
-        # Для этого используем синхронный метод .invoke() внутри to_thread.
-        response = await asyncio.to_thread(
-            agent_executor.invoke,
-            {
-                "input": user_input,
-                "chat_history": memory.chat_memory.messages,
-            },
-        )
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
-        ai_response = response.get('output', "Не удалось обработать ваш запрос.")
-    except Exception as e:
-        logging.error(f"Ошибка при вызове agent_executor: {e}", exc_info=True)
-        ai_response = "К сожалению, произошла внутренняя ошибка. Попробуйте, пожалуйста, позже."
-
-    await message.answer(ai_response)
-
-async def main_bot():
-    """Главная функция для запуска бота."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logging.critical("Критическая ошибка: TELEGRAM_BOT_TOKEN не найден в переменных окружения!")
-        return
-
-    bot = Bot(token=token)
-    dp = Dispatcher()
-    dp.include_router(router)
     
-    # Удаляем вебхук, если он был установлен, на случай перезапуска
-    await bot.delete_webhook(drop_pending_updates=True)
+    agent = create_react_agent(llm, all_tools, prompt)
     
-    logging.info("Бот запускается в режиме опроса (polling)...")
-    await dp.start_polling(bot)
+    agent_executor = AgentExecutor(
+        agent=agent, 
+        tools=all_tools, 
+        verbose=True, 
+        handle_parsing_errors=True,
+        max_iterations=5 # Возвращаем стандартное значение, т.к. Llama3 умнее
+    )
+    
+    logging.info("Ядро агента (ReAct AgentExecutor) успешно создано с Llama3.")
+    return agent_executor
+
+agent_executor = create_agent_executor()
