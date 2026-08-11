@@ -28,3 +28,4 @@ google-auth-oauthlib
 # Другие инструменты
 tavily-python
 python-dotenv
+requests
