@@ -71,4 +71,11 @@ wheels/
 # Local configuration
 .env*
 !.env.example
+
+# Google Cloud Secrets
+mcp_server/credentials.json
+*.json
+
+# Test audio files (cleanup from yesterday)
+test_*.*
 ```
